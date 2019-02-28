@@ -1,5 +1,6 @@
-scrumblr
-========
+PlanSpace
+=========
+Work In Progess!
 
 what is it
 ----------
@@ -10,10 +11,6 @@ what is it
 you can play with a demo here:
 
 - [scrumblr.ca/demo](http://scrumblr.ca/demo)
-
-And view a video here:
-
-- [Video Demo](http://www.youtube.com/watch?v=gAKxyOh1zPk)
 
 use scrumblr
 ------------
