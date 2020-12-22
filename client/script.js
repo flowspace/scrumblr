@@ -6,8 +6,13 @@ var boardInitialized = false;
 var keyTrap = null;
 
 var baseurl = location.pathname.substring(0, location.pathname.lastIndexOf('/'));
-var socket = io.connect({path: baseurl + "/socket.io"});
-
+//var socket = io();
+// We move socket.io from it's default URL (/socket.io) to (/socketio) because during
+// the upgrade to new socket.io, old clients on production server were hitting old
+// URL and crashing the server.
+var socket = io({
+    path: '/socketio'
+});
 //an action has happened, send it to the
 //server
 function sendAction(a, d) {
@@ -18,7 +23,7 @@ function sendAction(a, d) {
         data: d
     };
 
-    socket.json.send(message);
+    socket.send(message);
 }
 
 socket.on('connect', function() {
@@ -41,6 +46,7 @@ socket.on('message', function(data) {
 });
 
 function unblockUI() {
+    $('.board-outline').trigger('initboard');
     $.unblockUI({fadeOut: 50});
 }
 
@@ -73,6 +79,7 @@ function getMessage(m) {
     var data = message.data;
 
     //console.log('<-- ' + action);
+    //console.log(message);
 
     switch (action) {
         case 'roomAccept':
@@ -95,7 +102,7 @@ function getMessage(m) {
 
         case 'createCard':
             //console.log(data);
-            drawNewCard(data.id, data.text, data.x, data.y, data.rot, data.colour,
+            drawNewCard(data.id, data.text, data.x, data.y, data.rot, data.colour, data.type, null,
                 null);
             break;
 
@@ -108,7 +115,12 @@ function getMessage(m) {
             break;
 
         case 'editCard':
-            $("#" + data.id).children('.content:first').text(data.value);
+            if (data.value) $("#" + data.id).children('.content:first').text(data.value);
+            if (data.colour)
+            {
+                $('#' + data.id).children('.change-colour').data('colour',data.colour);
+                $('#' + data.id).children('.card-image').attr("src", 'images/' + data.colour + '-card.png');
+            }
             break;
 
         case 'initColumns':
@@ -147,6 +159,13 @@ function getMessage(m) {
             resizeBoard(message.data);
             break;
 
+        case 'editText':
+            var item = data.item;
+            var text = "";
+            if (data.text) { text = data.text; }
+            updateText(item, text);
+            break;
+
         default:
             //unknown message
             alert('unknown action: ' + JSON.stringify(message));
@@ -156,24 +175,47 @@ function getMessage(m) {
 
 }
 
+function updateText (item, text) {
+    if (item == 'board-title' && text != '') {
+        $('#board-title').text(text);
+    }
+}
+
+
 $(document).bind('keyup', function(event) {
     keyTrap = event.which;
 });
 
-function drawNewCard(id, text, x, y, rot, colour, sticker, animationspeed) {
+function drawNewCard(id, text, x, y, rot, colour, type, sticker, animationspeed) {
     //cards[id] = {id: id, text: text, x: x, y: y, rot: rot, colour: colour};
 
-    var h = '<div id="' + id + '" class="card ' + colour +
-        ' draggable" style="-webkit-transform:rotate(' + rot +
-        'deg);\
-	">\
-	<img src="images/icons/token/Xion.png" class="card-icon delete-card-icon" />\
-	<img class="card-image" src="images/' +
-        colour + '-card.png">\
-	<div id="content:' + id +
-        '" class="content stickertarget droppable">' +
-        text + '</div><span class="filler"></span>\
-	</div>';
+    var h = '';
+
+    if (type == 'card' || type == null) {
+        h = '<div id="' + id + '" class="card ' + colour +
+            ' draggable cardstack" style="-webkit-transform:rotate(' + rot +
+            'deg);\
+        ">\
+        <svg class="card-icon delete-card-icon" width="15" height="15"><use xlink:href="teenyicons/teenyicons-outline-sprite.svg#outline--x-circle" /></svg>\
+        <svg class="card-icon card-icon2 change-colour" data-colour="' + colour + '" width="15" height="15"><use xlink:href="teenyicons/teenyicons-outline-sprite.svg#outline--paintbrush" /></svg>\
+        <img class="card-image" src="images/' + colour + '-card.png">\
+        <div id="content:' + id +
+            '" class="content stickertarget droppable">' +
+            text + '</div><span class="filler"></span>\
+        </div>';
+    }
+    else if (type == 'sticky') {
+         h = '<div id="' + id + '" class="sticky ' + colour +
+         ' draggable cardstack" style="-webkit-transform:rotate(' + rot +
+         'deg);\
+        ">\
+        <svg class="card-icon delete-card-icon" width="15" height="15"><use xlink:href="teenyicons/teenyicons-outline-sprite.svg#outline--x-circle" /></svg>\
+        <img class="card-image" src="images/postit/p' + colour + '.png">\
+        <div id="content:' + id +
+            '" class="content stickertarget droppable">' +
+            text + '</div><span class="filler"></span>\
+        </div>';
+    }
 
     var card = $(h);
     card.appendTo('#board');
@@ -193,7 +235,7 @@ function drawNewCard(id, text, x, y, rot, colour, sticker, animationspeed) {
         snap: false,
         snapTolerance: 5,
         containment: [0, 0, 2000, 2000],
-        stack: ".card",
+        stack: ".cardstack",
         start: function(event, ui) {
             keyTrap = null;
         },
@@ -203,13 +245,23 @@ function drawNewCard(id, text, x, y, rot, colour, sticker, animationspeed) {
                 return false;
             }
         },
-		handle: "div.content"
+        handle: "div.content",
+        zIndex: 100
     });
 
     //After a drag:
     card.bind("dragstop", function(event, ui) {
         if (keyTrap == 27) {
             keyTrap = null;
+            return;
+        }
+
+        if ($(event.target).hasClass("stuck-sticker"))
+        {
+            //You're dragging a sticker on the card, not the card itself
+            //so do not move the card
+            //console.log(event);
+            if(event.offsetX > 20) console.log('delete!');
             return;
         }
 
@@ -286,29 +338,31 @@ function drawNewCard(id, text, x, y, rot, colour, sticker, animationspeed) {
         }
     );
 
-    card.children('.content').editable(function(value, settings) {
-        onCardChange(id, value);
-        return (value);
-    }, {
-        type: 'textarea',
-        submit: 'OK',
-        style: 'inherit',
-        cssclass: 'card-edit-form',
-        placeholder: 'Double Click to Edit.',
-        onblur: 'submit',
-        event: 'dblclick', //event: 'mouseover'
+    card.children('.change-colour').click(
+        function() {
+                rotateCardColor(id, $(this).data('colour'));
+            });
+ 
+
+    card.children('.content').editable({
+        multiline: true,
+        saveDelay: 600,
+        save: function(content) {
+            onCardChange(id, content.target.innerText, null);
+        }
     });
 
     //add applicable sticker
-    if (sticker !== null)
+    if (sticker)
         addSticker(id, sticker);
 }
 
 
-function onCardChange(id, text) {
+function onCardChange(id, text, c) {
     sendAction('editCard', {
         id: id,
-        value: text
+        value: text,
+        colour: c
     });
 }
 
@@ -323,6 +377,8 @@ function addSticker(cardId, stickerId) {
 
     stickerContainer = $('#' + cardId + ' .filler');
 
+    if (stickerContainer.length == 0) return;
+
     if (stickerId === "nosticker") {
         stickerContainer.html("");
         return;
@@ -332,13 +388,19 @@ function addSticker(cardId, stickerId) {
     if (Array.isArray(stickerId)) {
         for (var i in stickerId) {
             stickerContainer.prepend('<img src="images/stickers/' + stickerId[i] +
-                '.png">');
+                '.png" class="stuck-sticker">');
         }
     } else {
         if (stickerContainer.html().indexOf(stickerId) < 0)
             stickerContainer.prepend('<img src="images/stickers/' + stickerId +
-                '.png">');
+                '.png" class="stuck-sticker">');
     }
+
+    $(".stuck-sticker").draggable({
+        revert: true,
+        zIndex: 1000,
+        cursor: "pointer",
+    });
 
 }
 
@@ -346,8 +408,8 @@ function addSticker(cardId, stickerId) {
 //----------------------------------
 // cards
 //----------------------------------
-function createCard(id, text, x, y, rot, colour) {
-    drawNewCard(id, text, x, y, rot, colour, null);
+function createCard(id, text, x, y, rot, colour, type) {
+    drawNewCard(id, text, x, y, rot, colour, type, null, null);
 
     var action = "createCard";
 
@@ -357,19 +419,45 @@ function createCard(id, text, x, y, rot, colour) {
         x: x,
         y: y,
         rot: rot,
-        colour: colour
+        colour: colour,
+        type: type
     };
 
     sendAction(action, data);
 
 }
 
+var cardColours = ['yellow', 'green', 'blue', 'white'];
+var stickyColours = ['1', '2', '3'];
+
+
 function randomCardColour() {
-    var colours = ['yellow', 'green', 'blue', 'white'];
 
-    var i = Math.floor(Math.random() * colours.length);
+    var i = Math.floor(Math.random() * cardColours.length);
 
-    return colours[i];
+    return cardColours[i];
+}
+
+function randomStickyColour() {
+
+    var i = Math.floor(Math.random() * stickyColours.length);
+
+    return stickyColours[i];
+}
+
+
+function rotateCardColor(id, currentColour) {
+    var index = cardColours.indexOf(currentColour.toString());
+    //new position:
+    var newIndex = index + 1;
+    newIndex = newIndex % (stickyColours.length + 1);
+
+    $('#'+id).children('.card-image').attr("src", 'images/' + cardColours[newIndex] + '-card.png');
+    $('#'+id).children('.change-colour').data('colour',cardColours[newIndex]);
+
+    //var trueId = id.substr(4); // remove "card" from start of id // no don't do this, server wants "card" in front
+    onCardChange(id, null, cardColours[newIndex]);
+
 }
 
 
@@ -389,8 +477,9 @@ function initCards(cardArray) {
             card.y,
             card.rot,
             card.colour,
+            card.type,
             card.sticker,
-            0
+            0,
         );
     }
 
@@ -411,22 +500,14 @@ function drawNewColumn(columnName) {
 
     $('#icon-col').before('<td class="' + cls +
         '" width="10%" style="display:none"><h2 id="col-' + (totalcolumns + 1) +
-        '" class="editable">' + columnName + '</h2></td>');
+        '" class="editable column-editable">' + columnName + '</h2></td>');
 
-    $('.editable').editable(function(value, settings) {
-        onColumnChange(this.id, value);
-        return (value);
-    }, {
-        style: 'inherit',
-        cssclass: 'card-edit-form',
-        type: 'textarea',
-        placeholder: 'New',
-        onblur: 'submit',
-        width: '',
-        height: '',
-        xindicator: '<img src="images/ajax-loader.gif">',
-        event: 'dblclick', //event: 'mouseover'
-    });
+    $('.editable').editable({
+        multiline: false,
+        save: function(content) {
+            onColumnChange(this.id, content.target.innerText);
+        }
+    });    
 
     $('.col:last').fadeIn(1500);
 
@@ -605,29 +686,34 @@ function updateName(sid, name) {
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 
-function boardResizeHappened(event, ui) {
-    var newsize = ui.size;
-
-    sendAction('setBoardSize', newsize);
+function boardResizeHappened(event, newSize) {
+    sendAction('setBoardSize', newSize);
 }
 
 function resizeBoard(size) {
-    $(".board-outline").animate({
-        height: size.height,
-        width: size.width
-    });
+    // $(".board-outline").animate({
+    //     height: size.height,
+    //     width: size.width
+    // });
+
+    $(".board-outline").height(size.height);
+    $(".board-outline").width(size.width);
+
+    $('.board-outline').trigger('initboard');
+
+
 }
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 
 function calcCardOffset() {
     var offsets = {};
-    $(".card").each(function() {
+    $(".card,.sticky").each(function() {
         var card = $(this);
         $(".col").each(function(i) {
             var col = $(this);
             if (col.offset().left + col.outerWidth() > card.offset().left +
-                card.outerWidth() || i === $(".col").size() - 1) {
+                card.outerWidth() || i === $(".col").length - 1) {
                 offsets[card.attr('id')] = {
                     col: col,
                     x: ((card.offset().left - col.offset().left) / col.outerWidth())
@@ -644,7 +730,7 @@ function calcCardOffset() {
 //doSync is false if you don't want to synchronize
 //with all the other users who are in this room
 function adjustCard(offsets, doSync) {
-    $(".card").each(function() {
+    $(".card,.sticky").each(function() {
         var card = $(this);
         var offset = offsets[this.id];
         if (offset) {
@@ -676,6 +762,24 @@ function adjustCard(offsets, doSync) {
     });
 }
 
+//adjusts the marker and eraser after a board resize
+function adjustMarker(originalSize, newSize) {
+    //remove any y positioning. Makes a harsh jump but works as a hack
+    $("#marker,#eraser").css('top','');
+    // console.log( "markerleft: " + $('#marker').css('left') );
+    // console.log( "size: " + newSize.width);
+     
+    //if either has gone over the edge of the board, just bring it in
+    if ( parseFloat($('#marker').css('left')) > newSize.width - 100)
+    {
+        $('#marker').css('left', newSize.width-100 + 'px' );
+    }
+    if ( parseFloat($('#eraser').css('left')) > newSize.width - 100)
+    {
+        $('#eraser').css('left', newSize.width-100 + 'px' );
+    }
+}
+
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 
@@ -694,7 +798,7 @@ $(function() {
 
     $("#create-card")
         .click(function() {
-            var rotation = Math.random() * 10 - 5; //add a bit of random rotation (+/- 10deg)
+            var rotation = Math.random() * 10 - 5; //add a bit of random rotation (+/- 5deg)
             uniqueID = Math.round(Math.random() * 99999999); //is this big enough to assure uniqueness?
             //alert(uniqueID);
             createCard(
@@ -702,25 +806,58 @@ $(function() {
                 '',
                 58, $('div.board-outline').height(), // hack - not a great way to get the new card coordinates, but most consistant ATM
                 rotation,
-                randomCardColour());
+                randomCardColour(),
+                "card");
+        });
+    
+    $("#create-sticky")
+        .click(function() {
+            var rotation = Math.random() * 4 - 2; //add a bit of random rotation (+/- 2deg)
+            uniqueID = Math.round(Math.random() * 99999999); //is this big enough to assure uniqueness?
+            //alert(uniqueID);
+            createCard(
+                'card' + uniqueID,
+                '',
+                58, $('div.board-outline').height(), // hack - not a great way to get the new card coordinates, but most consistant ATM
+                rotation,
+                randomStickyColour(),
+                "sticky");
         });
 
 
 
     // Style changer
     $("#smallify").click(function() {
+
+        var newBoardSize = {};
+        var oldWidth = $(".board-outline").width();
+        var oldHeight = $(".board-outline").height();
+
+        var offsets = calcCardOffset();
+    
         if (currentTheme == "bigcards") {
             changeThemeTo('smallcards');
+            newBoardSize.height = oldHeight / 1.5;
+            newBoardSize.width = oldWidth / 1.5;
         } else if (currentTheme == "smallcards") {
             changeThemeTo('bigcards');
+            newBoardSize.height = oldHeight * 1.5;
+            newBoardSize.width = oldWidth * 1.5; 
         }
         /*else if (currentTheme == "nocards")
 		{
 			currentTheme = "bigcards";
 			$("link[title=cardsize]").attr("href", "css/bigcards.css");
-		}*/
+        }*/
+    
+        resizeBoard(newBoardSize);
+        boardResizeHappened(null, newBoardSize);
+        adjustCard(offsets, true);
+
 
         sendAction('changeTheme', currentTheme);
+
+
 
 
         return false;
@@ -823,8 +960,9 @@ $(function() {
             adjustCard(offsets, false);
         });
         $(".board-outline").bind("resizestop", function(event, ui) {
-            boardResizeHappened(event, ui);
+            boardResizeHappened(event, ui.size);
             adjustCard(offsets, true);
+            adjustMarker(ui.originalSize, ui.size);
         });
     })();
 
@@ -841,4 +979,41 @@ $(function() {
     });
 
 
+    
+    $( "#menu" ).menu();
+    $('#configmenu').click(function() {
+        $('#menu').show();
+    });
+    $(document.body).click(function() {
+        $('#menu').hide();
+    });
+    $("#menu,#configmenu").click( function(e) {
+        e.stopPropagation(); // this stops the event from bubbling up to the body
+    });
+    
+    $(".ceditable").editable({
+        multiline: false,
+        saveDelay: 600, //wait 600ms before calling "save" callback
+        autoselect: false, //select content automatically when editing starts
+        save: function(content) {
+            //here you can save content to your MVC framework's model or send directly to server...
+            //console.log(content);
+
+            var action = "editText";
+
+            var data = {
+                item: 'board-title',
+                text: content.target.innerText
+            };
+            
+            if (content.target.innerText.length > 0)
+                sendAction(action, data);
+        },
+        validate: function(content) {
+            //here you can validate content using RegExp or any other JS code to return false for invalid input
+            return content !== "";
+        }
+    });
+
+    
 });

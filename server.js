@@ -2,19 +2,45 @@
  SYSTEM INCLUDES
 **************/
 var	http = require('http');
-var sys = require('sys');
+var sys = require('util');
 var	async = require('async');
 var sanitizer = require('sanitizer');
 var compression = require('compression');
 var express = require('express');
-var conf = require('./config.js').server;
-var ga = require('./config.js').googleanalytics;
+// var conf = require('./config.js').server;
+// var ga = require('./config.js').googleanalytics;
+var nconf = require('nconf');
+
+/*************
+ * nconf SETUP
+ *************/
+
+// Set up nconf to include configuration first
+// From command line args, then env, then
+// config file
+nconf.argv()
+.env()
+.file({ file: 'config.json' });
+
+// Now set default config values:
+nconf.set('server:baseurl', '/');
+nconf.set('server:port', 8080);
+
+nconf.set('ga:account', 'UA-2069672-4');
+
+nconf.set('redis:url', 'redis://127.0.0.1:6379');
+nconf.set('redis:prefix', '#scrumblr#');
+
+console.log('NODE_ENV: ' + nconf.get('NODE_ENV'));
+console.log('server: ' + JSON.stringify(nconf.get('server')));
+console.log('redis: ' + JSON.stringify(nconf.get('redis')));
 
 /**************
  LOCAL INCLUDES
 **************/
 var	rooms	= require('./lib/rooms.js');
-var	data	= require('./lib/data.js').db;
+var	data	= require('./lib/data/redis.js').db;
+
 
 /**************
  GLOBALS
@@ -28,25 +54,32 @@ var sids_to_user_names = [];
 var app = express();
 var router = express.Router();
 
-app.use(compression());
-app.use(conf.baseurl, router);
+app.set('view engine', 'pug');
 
-app.locals.ga = ga.enabled;
-app.locals.gaAccount = ga.account;
+app.use(compression());
+app.use(nconf.get('server:baseurl'), router);
+
+// app.locals.ga = ga.enabled;
+// app.locals.gaAccount = ga.account;
 
 router.use(express.static(__dirname + '/client'));
 
 var server = require('http').Server(app);
-server.listen(conf.port);
-
-console.log('Server running at http://127.0.0.1:' + conf.port + '/');
 
 /**************
  SETUP Socket.IO
 **************/
-var io = require('socket.io')(server, {
-	path: conf.baseurl == '/' ? '' : conf.baseurl + "/socket.io"
-});
+// var io = require('socket.io')(server, {
+// 	path: conf.baseurl == '/' ? '' : conf.baseurl + "/socket.io"
+// });
+// We move socket.io from it's default URL (/socket.io) to (/socketio) because during
+// the upgrade to new socket.io, old clients on production server were hitting old
+// URL and crashing the server.
+const options = { path: '/socketio' };
+const io = require('socket.io')(server, options);
+
+server.listen(nconf.get('server:port'));
+console.log('Server running at port:' + nconf.get('server:port') + '/');
 
 
 /**************
@@ -54,12 +87,11 @@ var io = require('socket.io')(server, {
 **************/
 router.get('/', function(req, res) {
 	//console.log(req.header('host'));
-	url = req.header('host') + req.baseUrl;
+	var url = req.header('host') + req.baseUrl;
 
-	var connected = io.sockets.connected;
-	clientsCount = Object.keys(connected).length;
+	var clientsCount = io.of("/").sockets.size;
 
-	res.render('home.jade', {
+	res.render('home.pug', {
 		url: url,
 		connected: clientsCount
 	});
@@ -67,14 +99,14 @@ router.get('/', function(req, res) {
 
 
 router.get('/demo', function(req, res) {
-	res.render('index.jade', {
+	res.render('index.pug', {
 		pageTitle: 'scrumblr - demo',
 		demo: true
 	});
 });
 
 router.get('/:id', function(req, res){
-	res.render('index.jade', {
+	res.render('index.pug', {
 		pageTitle: ('scrumblr - ' + req.params.id)
 	});
 });
@@ -83,12 +115,11 @@ router.get('/:id', function(req, res){
 /**************
  SOCKET.I0
 **************/
-io.sockets.on('connection', function (client) {
+io.on('connection', (client) => {
 	//santizes text
 	function scrub( text ) {
 		if (typeof text != "undefined" && text !== null)
 		{
-
 			//clip the string if it is too long
 			if (text.length > 65535)
 			{
@@ -123,7 +154,7 @@ io.sockets.on('connection', function (client) {
 			case 'joinRoom':
 				joinRoom(client, message.data, function(clients) {
 
-						client.json.send( { action: 'roomAccept', data: '' } );
+						client.send( { action: 'roomAccept', data: '' } );
 
 				});
 
@@ -163,9 +194,11 @@ io.sockets.on('connection', function (client) {
 				clean_data.y = scrub(data.y);
 				clean_data.rot = scrub(data.rot);
 				clean_data.colour = scrub(data.colour);
+				clean_data.type = scrub(data.type);
+
 
 				getRoom(client, function(room) {
-					createCard( room, clean_data.id, clean_data.text, clean_data.x, clean_data.y, clean_data.rot, clean_data.colour);
+					createCard( room, clean_data.id, clean_data.text, clean_data.x, clean_data.y, clean_data.rot, clean_data.colour, clean_data.type);
 				});
 
 				message_out = {
@@ -182,10 +215,14 @@ io.sockets.on('connection', function (client) {
 				clean_data = {};
 				clean_data.value = scrub(message.data.value);
 				clean_data.id = scrub(message.data.id);
+				clean_data.colour = scrub(message.data.colour);
+
+				// console.log("cardupdate:");
+				// console.log(clean_data);
 
 				//send update to database
 				getRoom(client, function(room) {
-					db.cardEdit( room , clean_data.id, clean_data.value );
+					db.cardEdit( room , clean_data.id, clean_data.value, clean_data.colour );
 				});
 
 				message_out = {
@@ -302,6 +339,24 @@ io.sockets.on('connection', function (client) {
 				broadcastToRoom( client, { action: 'setBoardSize', data: size } );
 				break;
 
+			case 'editText':
+				var text = "";
+				text = scrub(message.data.text);
+
+				//shorten string in case it is long
+				text = text.substring(0,64);
+
+				//save Board Name to DB @TODO
+				getRoom(client, function(room) {
+					db.textEdit( room, 'board-title', text );
+				});
+
+				var msg = {};
+				msg.action = 'editText';
+				msg.data = { item: 'board-title', text: text };
+				broadcastToRoom( client, msg );
+				break;
+
 			default:
 				//console.log('unknown action');
 				break;
@@ -331,7 +386,7 @@ function initClient ( client )
 
 		db.getAllCards( room , function (cards) {
 
-			client.json.send(
+			client.send(
 				{
 					action: 'initCards',
 					data: cards
@@ -342,7 +397,7 @@ function initClient ( client )
 
 
 		db.getAllColumns ( room, function (columns) {
-			client.json.send(
+			client.send(
 				{
 					action: 'initColumns',
 					data: columns
@@ -355,7 +410,7 @@ function initClient ( client )
 
 			if (theme === null) theme = 'bigcards';
 
-			client.json.send(
+			client.send(
 				{
 					action: 'changeTheme',
 					data: theme
@@ -366,10 +421,23 @@ function initClient ( client )
 		db.getBoardSize( room, function(size) {
 
 			if (size !== null) {
-				client.json.send(
+				client.send(
 					{
 						action: 'setBoardSize',
 						data: size
+					}
+				);
+			}
+		});
+
+		//Right now this only gets one object (board title) but we will extend it later
+		//to handle an array of all text we want to sync
+		db.getAllTexts( room , function (texts) {
+			if (texts) {
+				client.send(
+					{
+						action: 'editText',
+						data: { item: "board-title", text: texts }
 					}
 				);
 			}
@@ -392,7 +460,7 @@ function initClient ( client )
 		}
 
 		//console.log('initialusers: ' + roommates);
-		client.json.send(
+		client.send(
 			{
 				action: 'initialUsers',
 				data: roommates
@@ -429,7 +497,7 @@ function broadcastToRoom ( client, message ) {
 }
 
 //----------------CARD FUNCTIONS
-function createCard( room, id, text, x, y, rot, colour ) {
+function createCard( room, id, text, x, y, rot, colour, type ) {
 	var card = {
 		id: id,
 		colour: colour,
@@ -437,6 +505,7 @@ function createCard( room, id, text, x, y, rot, colour ) {
 		x: x,
 		y: y,
 		text: text,
+		type: type,
 		sticker: null
 	};
 
